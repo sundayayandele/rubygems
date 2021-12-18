@@ -9,19 +9,29 @@ module Bundler
     def restart_with_locked_bundler_if_needed
       return unless needs_switching? && installed?
 
-      restart_with_locked_bundler
+      restart_with(lockfile_version)
     end
 
     def install_locked_bundler_and_restart_with_it_if_needed
       return unless needs_switching?
 
-      install_and_restart_with_locked_bundler
+      install_and_restart_with(lockfile_version)
+    end
+
+    def update_bundler_and_restart_with_it_if_needed(target)
+      version = resolve_update_version_from(target)
+      return unless version
+
+      Bundler.ui.info "Updating bundler to #{version}."
+
+      install_and_restart_with(version)
     end
 
     private
 
-    def install_and_restart_with_locked_bundler
-      bundler_dep = Gem::Dependency.new("bundler", lockfile_version)
+    def install_and_restart_with(version)
+      bundler_dep = Gem::Dependency.new("bundler", version)
+
       spec = fetch_spec_for(bundler_dep)
       return if spec.nil?
 
@@ -34,21 +44,18 @@ module Bundler
       Bundler.ui.trace e
       Bundler.ui.warn "There was an error installing the locked bundler version (#{lockfile_version}), rerun with the `--verbose` flag for more details. Going on using bundler #{current_version}."
     else
-      restart_with_locked_bundler
+      restart_with(version)
     end
 
     def fetch_spec_for(bundler_dep)
-      source = Bundler::Source::Rubygems.new("remotes" => "https://rubygems.org")
-      source.remote!
-      source.add_dependency_names("bundler")
-      spec = source.specs.search(bundler_dep).first
+      spec = specs.search(bundler_dep).first
       if spec.nil?
         Bundler.ui.warn "Your lockfile is locked to a version of bundler (#{lockfile_version}) that doesn't exist at https://rubygems.org/. Going on using #{current_version}"
       end
       spec
     end
 
-    def restart_with_locked_bundler
+    def restart_with(version)
       configured_gem_home = ENV["GEM_HOME"]
       configured_gem_path = ENV["GEM_PATH"]
 
@@ -57,7 +64,7 @@ module Bundler
 
       Bundler.with_original_env do
         Kernel.exec(
-          { "GEM_HOME" => configured_gem_home, "GEM_PATH" => configured_gem_path, "BUNDLER_VERSION" => lockfile_version },
+          { "GEM_HOME" => configured_gem_home, "GEM_PATH" => configured_gem_path, "BUNDLER_VERSION" => version },
           *cmd
         )
       end
@@ -68,9 +75,43 @@ module Bundler
         Bundler.rubygems.supports_bundler_trampolining? &&
         SharedHelpers.in_bundle? &&
         lockfile_version &&
-        !lockfile_version.end_with?(".dev") &&
-        lockfile_version != current_version &&
+        released?(lockfile_version) &&
+        !running?(lockfile_version) &&
         !updating?
+    end
+
+    def resolve_update_version_from(target)
+      return if specs.empty?
+
+      requirement = Gem::Requirement.new(target)
+      resolved_version = specs.sort.find {|s| requirement.satisfied_by?(s.version) }.version
+      needs_update = requirement.specific? ? !running?(resolved_version) : running_older_than?(resolved_version)
+      resolved_version = resolved_version.to_s
+
+      return unless released?(resolved_version) && needs_update
+
+      resolved_version
+    end
+
+    def specs
+      @specs ||= begin
+        source = Bundler::Source::Rubygems.new("remotes" => "https://rubygems.org")
+        source.remote!
+        source.add_dependency_names("bundler")
+        source.specs
+      end
+    end
+
+    def running?(version)
+      version == current_version
+    end
+
+    def running_older_than?(version)
+      current_version < version
+    end
+
+    def released?(version)
+      !version.end_with?(".dev")
     end
 
     def updating?
@@ -84,7 +125,7 @@ module Bundler
     end
 
     def current_version
-      @current_version ||= Bundler::VERSION
+      @current_version ||= Gem::Version.new(Bundler::VERSION)
     end
 
     def lockfile_version
