@@ -64,7 +64,7 @@ module Bundler
 
       Bundler.with_original_env do
         Kernel.exec(
-          { "GEM_HOME" => configured_gem_home, "GEM_PATH" => configured_gem_path, "BUNDLER_VERSION" => version },
+          { "GEM_HOME" => configured_gem_home, "GEM_PATH" => configured_gem_path, "BUNDLER_VERSION" => version.to_s },
           *cmd
         )
       end
@@ -86,7 +86,6 @@ module Bundler
       requirement = Gem::Requirement.new(target)
       resolved_version = specs.sort.find {|s| requirement.satisfied_by?(s.version) }.version
       needs_update = requirement.specific? ? !running?(resolved_version) : running_older_than?(resolved_version)
-      resolved_version = resolved_version.to_s
 
       return unless released?(resolved_version) && needs_update
 
@@ -111,7 +110,7 @@ module Bundler
     end
 
     def released?(version)
-      !version.end_with?(".dev")
+      !version.to_s.end_with?(".dev")
     end
 
     def updating?
@@ -121,7 +120,7 @@ module Bundler
     def installed?
       Bundler.configure
 
-      Bundler.rubygems.find_bundler(lockfile_version)
+      Bundler.rubygems.find_bundler(lockfile_version.to_s)
     end
 
     def current_version
@@ -129,7 +128,10 @@ module Bundler
     end
 
     def lockfile_version
-      @lockfile_version ||= Bundler::LockfileParser.bundled_with
+      return @lockfile_version if defined?(@lockfile_version)
+
+      parsed_version = Bundler::LockfileParser.bundled_with
+      @lockfile_version = parsed_version ? Gem::Version.new(parsed_version) : nil
     end
   end
 end
